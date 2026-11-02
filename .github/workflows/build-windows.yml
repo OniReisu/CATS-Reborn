@@ -1,0 +1,59 @@
+name: Build CATS-Reborn (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Python build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pydirectinput pyautogui pyperclip pytz tzlocal psutil discord-webhook
+
+      - name: Build traversal system
+        shell: pwsh
+        run: |
+          python -m PyInstaller TraversalSystem/main.py --onedir --name TraversalSystem --distpath TraversalSystem/pyinstaller --workpath TraversalSystem/pyinstaller/build --specpath TraversalSystem/pyinstaller --python-option u --noconfirm
+
+      - name: Build C# application
+        shell: pwsh
+        run: |
+          msbuild MultiCarrierManager.sln /m /p:Configuration=Release /p:Platform="Any CPU" /verbosity:minimal
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'MultiCarrierManager/bin/Release/CATS.exe')) { throw 'CATS.exe was not produced.' }
+          if (!(Test-Path 'MultiCarrierManager/bin/Release/CATS/pyinstaller/TraversalSystem/TraversalSystem.exe')) { throw 'TraversalSystem.exe was not copied into the release folder.' }
+
+      - name: Package portable release
+        shell: pwsh
+        run: |
+          Compress-Archive -Path 'MultiCarrierManager/bin/Release/*' -DestinationPath 'CATS-Reborn-Windows-x64.zip' -Force
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CATS-Reborn-Windows-x64
+          path: CATS-Reborn-Windows-x64.zip
+          if-no-files-found: error
