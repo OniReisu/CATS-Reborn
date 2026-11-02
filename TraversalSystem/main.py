@@ -30,7 +30,9 @@ import ctypes
 import pytz
 import tzlocal
 import psutil
+import json
 
+import windowmanager
 from journalwatcher import JournalWatcher
 from discordhandler import DiscordHandler
 from reshandler import Reshandler
@@ -66,6 +68,16 @@ power_saving = False
 global refuel_mode
 refuel_mode = 0
 
+# Multi-client support (see windowmanager.py). Both are optional and empty by default.
+# Name of the commander this instance controls, used to pick the right journal file when
+# several clients write to the same journal directory.
+global commander_name
+commander_name = ""
+
+# Which Elite window to focus and lock input for ("1", "2", "pid:1234"). Empty = old behaviour.
+global game_window
+game_window = ""
+
 # Get the screen resolution
 screen_width, screen_height = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
@@ -86,6 +98,8 @@ def load_settings():
     global disable_refuel
     global power_saving
     global refuel_mode
+    global commander_name
+    global game_window
     # AFAIK, it is impossible to launch the script without either settings file existing
 
     # Get settings from settings.txt
@@ -98,6 +112,15 @@ def load_settings():
             if line.startswith("webhook_url="):
                 print(line)
                 webhook_url = line.split("=")[1]
+
+            if line.startswith("commander_name="):
+                print(line)
+                commander_name = line.split("=", 1)[1].strip()
+
+            if line.startswith("game_window="):
+                print(line)
+                game_window = line.split("=", 1)[1].strip()
+                windowmanager.configure(game_window)
 
             if line.startswith("journal_directory="):
                 print(line)
@@ -148,8 +171,31 @@ def load_settings():
         os._exit(1)
 
 
+def journal_belongs_to(path, commander):
+    """True if the journal file at `path` was written by the named commander."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            # The commander is named in the first few events (Commander / LoadGame)
+            for _ in range(50):
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                name = event.get("Name") if event.get("event") == "Commander" else \
+                    event.get("Commander") if event.get("event") == "LoadGame" else None
+                if name is not None:
+                    return name.strip().lower() == commander.strip().lower()
+    except OSError:
+        pass
+    return False
+
+
 def latest_journal():
     global journal_directory
+    global commander_name
     dir_name = journal_directory
     # Get list of all files only in the given directory
     list_of_files = filter(lambda x: os.path.isfile(os.path.join(dir_name, x)),
@@ -160,13 +206,16 @@ def latest_journal():
                            )
     list_of_files.reverse()
 
-    journalName = ""
-    i = 0
-    while not journalName.startswith("Journal"):
-        journalName = list_of_files[i]
-        i += 1
+    journals = [f for f in list_of_files if f.startswith("Journal")]
 
-    return journal_directory + journalName.strip()
+    if commander_name:
+        # Newest journal written by our commander, ignoring other clients' journals
+        for f in journals:
+            if journal_belongs_to(os.path.join(dir_name, f), commander_name):
+                return journal_directory + f.strip()
+        raise FileNotFoundError("No journal found for commander '%s' in %s" % (commander_name, dir_name))
+
+    return journal_directory + journals[0].strip()
 
 
 def slight_random_time(time):
@@ -194,12 +243,24 @@ def follow_button_sequence(sequence_name):
 
 
 def restock_tritium():
+    if not auto_plot_jumps or disable_refuel:
+        return
+
+    try:
+        with windowmanager.input_session():
+            restock_tritium_inputs()
+    except Exception as e:
+        # Runs in its own thread, so report the failure instead of dying silently
+        print("Tritium restock failed: %s" % e)
+
+
+def restock_tritium_inputs():
     global refuel_mode
 
     if not auto_plot_jumps or disable_refuel:
         # If manual jumping is enabled or automatic refuel is disabled, skip function execution
         return
-    
+
     restock_order = ["restock_fc", "open_cargo_transfer", "restock_cargo"]
 
     for step in restock_order:
@@ -467,10 +528,18 @@ def main_loop():
         print("ETA: " + arrivalTime.strftime("%A, %I:%M%p (UTC%z)"))
 
         try:
-            timeToJump, departing_time = jump_to_system(line)
+            # Manual plotting waits on the user, so never hold the shared input lock for that
+            if auto_plot_jumps:
+                with windowmanager.input_session():
+                    timeToJump, departing_time = jump_to_system(line)
 
-            while timeToJump == 0 or departing_time == 0:
+                    while timeToJump == 0 or departing_time == 0:
+                        timeToJump, departing_time = jump_to_system(line)
+            else:
                 timeToJump, departing_time = jump_to_system(line)
+
+                while timeToJump == 0 or departing_time == 0:
+                    timeToJump, departing_time = jump_to_system(line)
 
             fTime = str(datetime.timedelta(seconds=timeToJump))
             # https://hammertime.cyou/
