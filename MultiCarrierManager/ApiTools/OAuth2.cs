@@ -1,4 +1,4 @@
-﻿// To build this yourself, you'll have to put in your own API keys.
+// To build this yourself, you'll have to put in your own API keys.
 // Rename this file to OAuth2.cs
 // and fill in the required fields.
 
@@ -18,8 +18,8 @@ using System.Text.RegularExpressions;
 
 namespace MultiCarrierManager.ApiTools {
     public class OAuth2 {
-        private static readonly string ClientID = "CLIENT ID HERE";
-        private static readonly string AppName = "APP NAME HERE/APP VERSION HERE";
+        private static readonly string ClientID = "0def6e38-c7de-4442-a714-737a26303624";
+        private static readonly string AppName = "CATS REBORN";
         private const string Scope = "auth capi";
         private const string AuthServerAuthURL = "https://auth.frontierstore.net/auth";
         private const string AuthServerTokenURL = "https://auth.frontierstore.net/token";
